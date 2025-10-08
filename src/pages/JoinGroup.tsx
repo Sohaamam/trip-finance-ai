@@ -21,16 +21,15 @@ const JoinGroup = () => {
 
     setLoading(true);
     try {
-      // Find group by invite code
-      const { data: group, error: groupError } = await supabase
-        .from("groups")
-        .select("*")
-        .eq("invite_code", inviteCode.toUpperCase())
-        .single();
+      // Find group by invite code using security definer function
+      const { data: groups, error: groupError } = await supabase
+        .rpc("find_group_by_invite_code", { _invite_code: inviteCode.toUpperCase() });
 
-      if (groupError || !group) {
+      if (groupError || !groups || groups.length === 0) {
         throw new Error("Invalid invite code");
       }
+
+      const group = groups[0];
 
       // Check if already a member
       const { data: existingMember } = await supabase

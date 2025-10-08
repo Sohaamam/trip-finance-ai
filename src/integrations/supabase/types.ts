@@ -178,6 +178,18 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      find_group_by_invite_code: {
+        Args: { _invite_code: string }
+        Returns: {
+          created_at: string
+          created_by: string
+          description: string
+          id: string
+          invite_code: string
+          name: string
+          updated_at: string
+        }[]
+      }
       generate_invite_code: {
         Args: Record<PropertyKey, never>
         Returns: string
