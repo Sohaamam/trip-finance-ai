@@ -26,29 +26,71 @@ const AddExpense = () => {
   const [splitEqually, setSplitEqually] = useState(true);
 
   useEffect(() => {
-    fetchGroupDetails();
-  }, [groupId]);
+    if (user && groupId) {
+      fetchGroupDetails();
+    }
+  }, [groupId, user]);
 
   const fetchGroupDetails = async () => {
     if (!groupId) return;
 
-    const { data: group } = await supabase
-      .from("groups")
-      .select("name")
-      .eq("id", groupId)
-      .single();
+    try {
+      // Get group name
+      const { data: group, error: groupError } = await supabase
+        .from("groups")
+        .select("name")
+        .eq("id", groupId)
+        .single();
 
-    if (group) setGroupName(group.name);
+      if (groupError) {
+        console.error("Error fetching group:", groupError);
+        toast.error("Failed to load group details");
+        return;
+      }
 
-    const { data: members } = await supabase
-      .from("group_members")
-      .select(`
-        user_id,
-        profiles:user_id (full_name)
-      `)
-      .eq("group_id", groupId);
+      if (group) setGroupName(group.name);
 
-    if (members) setGroupMembers(members);
+      // Get group members with their profiles
+      const { data: members, error: membersError } = await supabase
+        .from("group_members")
+        .select("user_id")
+        .eq("group_id", groupId);
+
+      if (membersError) {
+        console.error("Error fetching members:", membersError);
+        toast.error("Failed to load group members");
+        return;
+      }
+
+      console.log("Fetched members:", members);
+      
+      if (members && members.length > 0) {
+        // Fetch profile names for each member
+        const membersWithProfiles = await Promise.all(
+          members.map(async (member) => {
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("full_name")
+              .eq("id", member.user_id)
+              .single();
+            
+            return {
+              user_id: member.user_id,
+              full_name: profile?.full_name || "Unknown"
+            };
+          })
+        );
+        
+        console.log("Members with profiles:", membersWithProfiles);
+        setGroupMembers(membersWithProfiles);
+      } else {
+        toast.error("This group has no members. Add members first.");
+        setGroupMembers([]);
+      }
+    } catch (error: any) {
+      console.error("Unexpected error:", error);
+      toast.error("An error occurred while loading group details");
+    }
   };
 
   const handleAddExpense = async (e: React.FormEvent) => {
