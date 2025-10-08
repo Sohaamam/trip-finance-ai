@@ -25,6 +25,7 @@ const GroupDetail = () => {
   const [groupData, setGroupData] = useState<any>(null);
   const [expenses, setExpenses] = useState<any[]>([]);
   const [categoryData, setCategoryData] = useState<any[]>([]);
+  const [settlements, setSettlements] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [inviteCopied, setInviteCopied] = useState(false);
 
@@ -114,6 +115,11 @@ const GroupDetail = () => {
       setCategoryData(catData);
     }
 
+    // Calculate settlements
+    if (expensesData && members) {
+      await calculateSettlements(expensesData, members);
+    }
+
     const totalExpense = expensesData?.reduce((sum, exp) => sum + Number(exp.amount), 0) || 0;
 
     setGroupData({
@@ -123,6 +129,87 @@ const GroupDetail = () => {
     });
 
     setLoading(false);
+  };
+
+  const calculateSettlements = async (expensesData: any[], members: any[]) => {
+    // Create a balance map: balances[userId] = net amount (positive = owed to them, negative = they owe)
+    const balances = new Map<string, number>();
+    
+    // Initialize all members with 0 balance
+    members.forEach(m => balances.set(m.user_id, 0));
+
+    // For each expense, calculate balances
+    for (const expense of expensesData) {
+      const payerId = expense.paid_by;
+      const totalAmount = Number(expense.amount);
+      
+      // Get splits for this expense
+      const { data: splits } = await supabase
+        .from("expense_splits")
+        .select("user_id, amount")
+        .eq("expense_id", expense.id);
+
+      if (!splits || splits.length === 0) continue;
+
+      // Payer paid the full amount
+      balances.set(payerId, (balances.get(payerId) || 0) + totalAmount);
+
+      // Each person owes their split amount
+      splits.forEach(split => {
+        balances.set(split.user_id, (balances.get(split.user_id) || 0) - Number(split.amount));
+      });
+    }
+
+    // Convert balances to settlements (who owes whom)
+    const settlementsList: any[] = [];
+    const balanceArray = Array.from(balances.entries())
+      .filter(([_, amount]) => Math.abs(amount) > 0.01); // Ignore tiny amounts
+
+    // Separate creditors (owed money) and debtors (owe money)
+    const creditors = balanceArray.filter(([_, amount]) => amount > 0);
+    const debtors = balanceArray.filter(([_, amount]) => amount < 0);
+
+    // Calculate simplified settlements
+    for (const [debtorId, debtAmount] of debtors) {
+      let remainingDebt = Math.abs(debtAmount);
+      
+      for (const [creditorId, creditAmount] of creditors) {
+        if (remainingDebt < 0.01) break;
+        if (creditAmount < 0.01) continue;
+
+        const settlementAmount = Math.min(remainingDebt, creditAmount);
+        
+        // Get names
+        const { data: debtorProfile } = await supabase
+          .from("profiles")
+          .select("full_name")
+          .eq("id", debtorId)
+          .single();
+        
+        const { data: creditorProfile } = await supabase
+          .from("profiles")
+          .select("full_name")
+          .eq("id", creditorId)
+          .single();
+
+        settlementsList.push({
+          fromId: debtorId,
+          fromName: debtorProfile?.full_name || "Unknown",
+          toId: creditorId,
+          toName: creditorProfile?.full_name || "Unknown",
+          amount: settlementAmount,
+        });
+
+        remainingDebt -= settlementAmount;
+        // Update creditor's remaining credit
+        const creditorIndex = creditors.findIndex(([id]) => id === creditorId);
+        if (creditorIndex !== -1) {
+          creditors[creditorIndex][1] -= settlementAmount;
+        }
+      }
+    }
+
+    setSettlements(settlementsList);
   };
 
   const copyInviteCode = () => {
@@ -182,8 +269,9 @@ const GroupDetail = () => {
 
       <main className="container mx-auto px-4 py-8">
         <Tabs defaultValue="expenses" className="space-y-6">
-          <TabsList className="grid w-full max-w-md grid-cols-2">
+          <TabsList className="grid w-full max-w-md grid-cols-3">
             <TabsTrigger value="expenses">Expenses</TabsTrigger>
+            <TabsTrigger value="settlements">Settlements</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
 
@@ -229,6 +317,47 @@ const GroupDetail = () => {
                   </div>
                 </Card>
               ))
+            )}
+          </TabsContent>
+
+          <TabsContent value="settlements" className="space-y-4">
+            {settlements.length === 0 ? (
+              <Card className="border-border bg-card p-12 text-center">
+                <Users className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
+                <h3 className="mb-2 text-xl font-semibold text-foreground">All settled up!</h3>
+                <p className="text-muted-foreground">No outstanding balances in this group</p>
+              </Card>
+            ) : (
+              <div className="space-y-4">
+                <Card className="border-border bg-card p-6">
+                  <h3 className="mb-4 text-lg font-semibold text-foreground">Who Owes Whom</h3>
+                  <div className="space-y-3">
+                    {settlements.map((settlement, index) => (
+                      <div
+                        key={index}
+                        className="flex items-center justify-between rounded-lg border border-border bg-background p-4 transition-smooth hover:shadow-sm"
+                      >
+                        <div className="flex-1">
+                          <p className="text-sm text-foreground">
+                            <span className="font-semibold">
+                              {settlement.fromId === user?.id ? "You" : settlement.fromName}
+                            </span>
+                            {" owe "}
+                            <span className="font-semibold">
+                              {settlement.toId === user?.id ? "you" : settlement.toName}
+                            </span>
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xl font-bold text-primary">
+                            ₹{settlement.amount.toFixed(0)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              </div>
             )}
           </TabsContent>
 
